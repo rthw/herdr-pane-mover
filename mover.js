@@ -1,0 +1,361 @@
+#!/usr/bin/env node
+// Pane Mover overlay UI. Mouse-clickable and keyboard-driven, zero deps.
+// Runs inside a herdr plugin pane (placement: overlay). Moves the pane that
+// was focused when the action fired: re-split within its tab, swap with a
+// neighbor, or move it to another tab / workspace.
+"use strict";
+
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const herdr = process.env.HERDR_BIN_PATH ?? "herdr";
+const stateDir = process.env.HERDR_PLUGIN_STATE_DIR ?? "/tmp/herdr-pane-mover";
+const pluginId = process.env.HERDR_PLUGIN_ID ?? "osamahbeig.pane-mover";
+const selfPane = process.env.HERDR_PANE_ID ?? null; // the overlay's own pane
+
+// ---------- herdr CLI helpers ----------
+
+function cli(args) {
+  const res = spawnSync(herdr, args, { encoding: "utf8" });
+  if (res.status !== 0) {
+    throw new Error(
+      `herdr ${args.join(" ")} failed: ${(res.stderr || res.stdout || "").trim()}`
+    );
+  }
+  return res.stdout;
+}
+
+function cliJson(args) {
+  return JSON.parse(cli(args)).result;
+}
+
+// ---------- resolve the pane to move ----------
+
+function resolveTarget(panes) {
+  try {
+    const state = JSON.parse(
+      fs.readFileSync(path.join(stateDir, "target.json"), "utf8")
+    );
+    // Only trust a fresh stash (written by open.js just before the overlay).
+    if (state.target && Date.now() - state.at < 15000) return state.target;
+  } catch {
+    /* fall through */
+  }
+  try {
+    const ctx = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
+    const fromCtx =
+      ctx.pane_id ??
+      ctx.focused_pane_id ??
+      (ctx.pane && ctx.pane.pane_id) ??
+      (ctx.focused_pane && ctx.focused_pane.pane_id) ??
+      null;
+    if (fromCtx && fromCtx !== selfPane) return fromCtx;
+  } catch {
+    /* fall through */
+  }
+  // Last resort: the focused pane that isn't this overlay.
+  const focused = panes.find((p) => p.focused && p.pane_id !== selfPane);
+  return focused ? focused.pane_id : null;
+}
+
+// ---------- gather topology ----------
+
+function gather() {
+  const panes = cliJson(["pane", "list"]).panes;
+  const workspaces = cliJson(["workspace", "list"]).workspaces;
+  const target = resolveTarget(panes);
+  const targetPane = panes.find((p) => p.pane_id === target) || null;
+  const tabs = [];
+  for (const ws of workspaces) {
+    try {
+      for (const t of cliJson(["tab", "list", "--workspace", ws.workspace_id])
+        .tabs) {
+        tabs.push({ ...t, workspace_label: ws.label ?? ws.workspace_id });
+      }
+    } catch {
+      /* workspace may have vanished mid-read */
+    }
+  }
+  return { panes, workspaces, tabs, target, targetPane };
+}
+
+// ---------- move operations ----------
+
+function paneLabel(p) {
+  return p.label || p.agent || path.basename(p.cwd || "") || p.pane_id;
+}
+
+function siblingIn(tabId, panes, target) {
+  return panes.find(
+    (p) => p.tab_id === tabId && p.pane_id !== target && p.pane_id !== selfPane
+  );
+}
+
+// Re-split within the same tab: herdr has no in-place re-split, so bounce the
+// pane out to a temp tab and bring it back with the new direction.
+function resplit(state, dir) {
+  const { target, targetPane, panes } = state;
+  const sib = siblingIn(targetPane.tab_id, panes, target);
+  if (!sib) throw new Error("no sibling pane to split against");
+  cli([
+    "pane",
+    "move",
+    target,
+    "--new-tab",
+    "--workspace",
+    targetPane.workspace_id,
+    "--no-focus",
+  ]);
+  cli([
+    "pane",
+    "move",
+    target,
+    "--tab",
+    targetPane.tab_id,
+    "--split",
+    dir,
+    "--target-pane",
+    sib.pane_id,
+    "--focus",
+  ]);
+}
+
+function swap(state, dir) {
+  cli(["pane", "swap", "--direction", dir, "--pane", state.target]);
+}
+
+function moveToTab(state, tabId, dir) {
+  cli([
+    "pane",
+    "move",
+    state.target,
+    "--tab",
+    tabId,
+    "--split",
+    dir,
+    "--focus",
+  ]);
+}
+
+function moveToWorkspace(state, wsId) {
+  cli([
+    "pane",
+    "move",
+    state.target,
+    "--new-tab",
+    "--workspace",
+    wsId,
+    "--focus",
+  ]);
+}
+
+function moveToNewTab(state) {
+  moveToWorkspace(state, state.targetPane.workspace_id);
+}
+
+function moveToNewWorkspace(state) {
+  cli(["pane", "move", state.target, "--new-workspace", "--focus"]);
+}
+
+// ---------- terminal UI ----------
+
+const out = process.stdout;
+let rows = [];
+let cursor = 0;
+let status = "";
+
+function enterUi() {
+  out.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h");
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+}
+
+function leaveUi() {
+  out.write("\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l");
+  try {
+    process.stdin.setRawMode(false);
+  } catch {
+    /* stdin may already be gone */
+  }
+}
+
+function closeOverlay() {
+  // Ask herdr to close the plugin pane; if unsupported, process exit suffices.
+  spawnSync(herdr, [
+    "plugin",
+    "pane",
+    "close",
+    "--plugin",
+    pluginId,
+    "--entrypoint",
+    "mover",
+  ]);
+}
+
+function quit(code) {
+  leaveUi();
+  closeOverlay();
+  process.exit(code);
+}
+
+const B = "\x1b[1m";
+const D = "\x1b[2m";
+const I = "\x1b[7m";
+const R = "\x1b[0m";
+
+function render(title) {
+  out.write("\x1b[2J\x1b[H");
+  out.write(`${B}${title}${R}\r\n`);
+  out.write(`${D}click or ↑↓ + Enter · q/Esc cancels${R}\r\n\r\n`);
+  // Menu items start at terminal row 4 (1-based).
+  rows.forEach((item, i) => {
+    if (item.header) {
+      out.write(`${D}── ${item.header} ──${R}\r\n`);
+    } else {
+      const line = ` ${item.label} `;
+      out.write((i === cursor ? `${I}${line}${R}` : line) + "\r\n");
+    }
+  });
+  if (status) out.write(`\r\n${D}${status}${R}\r\n`);
+}
+
+function firstSelectable(from, step) {
+  let i = from;
+  while (i >= 0 && i < rows.length && rows[i].header) i += step;
+  return Math.max(0, Math.min(rows.length - 1, i));
+}
+
+function runMenu(title, items) {
+  return new Promise((resolve) => {
+    rows = items;
+    cursor = firstSelectable(0, 1);
+    render(title);
+    const onData = (buf) => {
+      const s = buf.toString("latin1");
+      // SGR mouse press: ESC [ < b ; x ; y M
+      const m = s.match(/\x1b\[<(\d+);(\d+);(\d+)M/);
+      if (m && (Number(m[1]) & 3) !== 3) {
+        const y = Number(m[3]);
+        const idx = y - 4; // menu items start at row 4
+        if (idx >= 0 && idx < rows.length && !rows[idx].header) {
+          cursor = idx;
+          render(title);
+          cleanup();
+          return resolve(rows[idx]);
+        }
+        return;
+      }
+      if (s === "q" || s === "\x1b" || s === "\x03") {
+        cleanup();
+        return resolve(null);
+      }
+      if (s === "\x1b[A" || s === "k") {
+        cursor = firstSelectable(Math.max(0, cursor - 1), -1);
+        return render(title);
+      }
+      if (s === "\x1b[B" || s === "j") {
+        cursor = firstSelectable(Math.min(rows.length - 1, cursor + 1), 1);
+        return render(title);
+      }
+      if (s === "\r" || s === "\n") {
+        if (!rows[cursor].header) {
+          cleanup();
+          return resolve(rows[cursor]);
+        }
+      }
+      const digit = s.match(/^[0-9]$/);
+      if (digit) {
+        const hit = rows.find((r) => r.key === s);
+        if (hit) {
+          cleanup();
+          return resolve(hit);
+        }
+      }
+    };
+    const cleanup = () => process.stdin.off("data", onData);
+    process.stdin.on("data", onData);
+  });
+}
+
+// ---------- menu construction ----------
+
+function mainMenu(state) {
+  const { targetPane, panes, tabs } = state;
+  const items = [];
+  const sib = siblingIn(targetPane.tab_id, panes, state.target);
+  if (sib) {
+    items.push({ header: "This tab" });
+    items.push({ key: "1", label: `[1] Re-split → side by side (right of ${paneLabel(sib)})`, act: () => resplit(state, "right") });
+    items.push({ key: "2", label: `[2] Re-split → stacked (below ${paneLabel(sib)})`, act: () => resplit(state, "down") });
+    items.push({ key: "3", label: "[3] Swap ← left", act: () => swap(state, "left") });
+    items.push({ key: "4", label: "[4] Swap → right", act: () => swap(state, "right") });
+    items.push({ key: "5", label: "[5] Swap ↑ up", act: () => swap(state, "up") });
+    items.push({ key: "6", label: "[6] Swap ↓ down", act: () => swap(state, "down") });
+  }
+  items.push({ header: "Elsewhere" });
+  if (tabs.length > 1)
+    items.push({ key: "7", label: "[7] Move to another tab…", submenu: "tab" });
+  items.push({ key: "8", label: "[8] Move to another workspace…", submenu: "workspace" });
+  items.push({ key: "9", label: "[9] Move to a new tab (this workspace)", act: () => moveToNewTab(state) });
+  items.push({ key: "0", label: "[0] Move to a new workspace", act: () => moveToNewWorkspace(state) });
+  return items;
+}
+
+function tabMenu(state) {
+  return state.tabs
+    .filter((t) => t.tab_id !== state.targetPane.tab_id)
+    .map((t) => ({
+      label: ` ${t.workspace_label} / ${t.label ?? "tab " + (t.number ?? t.tab_id)}`,
+      tabId: t.tab_id,
+    }));
+}
+
+function workspaceMenu(state) {
+  return state.workspaces.map((w) => ({
+    label: ` ${w.label ?? w.workspace_id}${w.workspace_id === state.targetPane.workspace_id ? " (current)" : ""}`,
+    wsId: w.workspace_id,
+  }));
+}
+
+// ---------- main ----------
+
+(async function main() {
+  let state;
+  try {
+    state = gather();
+  } catch (e) {
+    process.stderr.write(`pane-mover: ${e.message}\n`);
+    return quit(1);
+  }
+  if (!state.targetPane) {
+    process.stderr.write("pane-mover: could not resolve which pane to move\n");
+    return quit(1);
+  }
+
+  enterUi();
+  try {
+    const title = `Move pane: ${paneLabel(state.targetPane)} (${state.target})`;
+    let choice = await runMenu(title, mainMenu(state));
+    if (choice && choice.submenu === "tab") {
+      const t = await runMenu("Move to which tab?", tabMenu(state));
+      if (t) {
+        const d = await runMenu("Split direction in that tab?", [
+          { label: " → side by side (right)", dir: "right" },
+          { label: " ↓ stacked (down)", dir: "down" },
+        ]);
+        if (d) choice = { act: () => moveToTab(state, t.tabId, d.dir) };
+        else choice = null;
+      } else choice = null;
+    } else if (choice && choice.submenu === "workspace") {
+      const w = await runMenu("Move to which workspace?", workspaceMenu(state));
+      choice = w ? { act: () => moveToWorkspace(state, w.wsId) } : null;
+    }
+    if (choice && choice.act) choice.act();
+    quit(0);
+  } catch (e) {
+    status = `error: ${e.message}`;
+    render("Pane Mover — error (any key to close)");
+    process.stdin.once("data", () => quit(1));
+  }
+})();

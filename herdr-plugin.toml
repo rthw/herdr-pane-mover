@@ -1,0 +1,18 @@
+id = "osamahbeig.pane-mover"
+name = "Pane Mover"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Clickable overlay menu to move, re-split, or swap the current pane across tabs and workspaces."
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "open"
+title = "Move this pane…"
+contexts = ["workspace"]
+command = ["node", "open.js"]
+
+[[panes]]
+id = "mover"
+title = "Move pane"
+placement = "overlay"
+command = ["node", "mover.js"]
