@@ -112,14 +112,22 @@ function siblingIn(tabId, panes, target) {
 
 // Re-split within the same tab: herdr has no in-place re-split, so bounce the
 // pane out to a temp tab and bring it back with the new direction.
+// herdr's --split only knows right|down; left|up are done as split + swap.
+function baseDir(dir) {
+  return dir === "left" ? "right" : dir === "up" ? "down" : dir;
+}
+
 function resplit(state, dir) {
   const { target, targetPane, panes } = state;
   const sib = siblingIn(targetPane.tab_id, panes, target);
   if (!sib) throw new Error("no sibling pane to split against");
-  return [
+  const cmds = [
     ["pane", "move", target, "--new-tab", "--workspace", targetPane.workspace_id, "--no-focus"],
-    ["pane", "move", target, "--tab", targetPane.tab_id, "--split", dir, "--target-pane", sib.pane_id, "--focus"],
+    ["pane", "move", target, "--tab", targetPane.tab_id, "--split", baseDir(dir), "--target-pane", sib.pane_id, "--focus"],
   ];
+  if (dir === "left" || dir === "up")
+    cmds.push(["pane", "swap", "--direction", dir, "--pane", target]);
+  return cmds;
 }
 
 function swap(state, dir) {
@@ -127,7 +135,12 @@ function swap(state, dir) {
 }
 
 function moveToTab(state, tabId, dir) {
-  return [["pane", "move", state.target, "--tab", tabId, "--split", dir, "--focus"]];
+  const cmds = [
+    ["pane", "move", state.target, "--tab", tabId, "--split", baseDir(dir), "--focus"],
+  ];
+  if (dir === "left" || dir === "up")
+    cmds.push(["pane", "swap", "--direction", dir, "--pane", state.target]);
+  return cmds;
 }
 
 function moveToWorkspace(state, wsId) {
@@ -256,8 +269,7 @@ function runMenu(title, items) {
           return resolve(rows[cursor]);
         }
       }
-      const digit = s.match(/^[0-9]$/);
-      if (digit) {
+      if (/^[0-9a-zA-Z]$/.test(s)) {
         const hit = rows.find((r) => r.key === s);
         if (hit) {
           cleanup();
@@ -278,19 +290,21 @@ function mainMenu(state) {
   const sib = siblingIn(targetPane.tab_id, panes, state.target);
   if (sib) {
     items.push({ header: "This tab" });
-    items.push({ key: "1", label: `[1] Re-split → side by side (right of ${paneLabel(sib)})`, act: () => resplit(state, "right") });
-    items.push({ key: "2", label: `[2] Re-split → stacked (below ${paneLabel(sib)})`, act: () => resplit(state, "down") });
-    items.push({ key: "3", label: "[3] Swap ← left", act: () => swap(state, "left") });
-    items.push({ key: "4", label: "[4] Swap → right", act: () => swap(state, "right") });
-    items.push({ key: "5", label: "[5] Swap ↑ up", act: () => swap(state, "up") });
-    items.push({ key: "6", label: "[6] Swap ↓ down", act: () => swap(state, "down") });
+    items.push({ key: "1", label: `[1] Re-split ← left of ${paneLabel(sib)}`, act: () => resplit(state, "left") });
+    items.push({ key: "2", label: `[2] Re-split → right of ${paneLabel(sib)}`, act: () => resplit(state, "right") });
+    items.push({ key: "3", label: `[3] Re-split ↑ above ${paneLabel(sib)}`, act: () => resplit(state, "up") });
+    items.push({ key: "4", label: `[4] Re-split ↓ below ${paneLabel(sib)}`, act: () => resplit(state, "down") });
+    items.push({ key: "5", label: "[5] Swap ← left", act: () => swap(state, "left") });
+    items.push({ key: "6", label: "[6] Swap → right", act: () => swap(state, "right") });
+    items.push({ key: "7", label: "[7] Swap ↑ up", act: () => swap(state, "up") });
+    items.push({ key: "8", label: "[8] Swap ↓ down", act: () => swap(state, "down") });
   }
   items.push({ header: "Elsewhere" });
   if (tabs.length > 1)
-    items.push({ key: "7", label: "[7] Move to another tab…", submenu: "tab" });
-  items.push({ key: "8", label: "[8] Move to another workspace…", submenu: "workspace" });
-  items.push({ key: "9", label: "[9] Move to a new tab (this workspace)", act: () => moveToNewTab(state) });
-  items.push({ key: "0", label: "[0] Move to a new workspace", act: () => moveToNewWorkspace(state) });
+    items.push({ key: "t", label: "[t] Move to another tab…", submenu: "tab" });
+  items.push({ key: "w", label: "[w] Move to another workspace…", submenu: "workspace" });
+  items.push({ key: "n", label: "[n] Move to a new tab (this workspace)", act: () => moveToNewTab(state) });
+  items.push({ key: "N", label: "[N] Move to a new workspace", act: () => moveToNewWorkspace(state) });
   return items;
 }
 
@@ -332,9 +346,11 @@ function workspaceMenu(state) {
     if (choice && choice.submenu === "tab") {
       const t = await runMenu("Move to which tab?", tabMenu(state));
       if (t) {
-        const d = await runMenu("Split direction in that tab?", [
-          { label: " → side by side (right)", dir: "right" },
-          { label: " ↓ stacked (down)", dir: "down" },
+        const d = await runMenu("Where in that tab?", [
+          { key: "1", label: "[1] ← left (side by side)", dir: "left" },
+          { key: "2", label: "[2] → right (side by side)", dir: "right" },
+          { key: "3", label: "[3] ↑ top (stacked)", dir: "up" },
+          { key: "4", label: "[4] ↓ bottom (stacked)", dir: "down" },
         ]);
         if (d) choice = { act: () => moveToTab(state, t.tabId, d.dir) };
         else choice = null;

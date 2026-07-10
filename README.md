@@ -50,14 +50,13 @@ Menu:
 
 ```
 This tab
- [1] Re-split → side by side
- [2] Re-split → stacked
- [3-6] Swap ← → ↑ ↓
+ [1-4] Re-split ← → ↑ ↓ (relative to the sibling pane)
+ [5-8] Swap ← → ↑ ↓
 Elsewhere
- [7] Move to another tab…
- [8] Move to another workspace…
- [9] Move to a new tab (this workspace)
- [0] Move to a new workspace
+ [t] Move to another tab…   (then pick ← → ↑ ↓ placement)
+ [w] Move to another workspace…
+ [n] Move to a new tab (this workspace)
+ [N] Move to a new workspace
 ```
 
 ## How it works
@@ -65,9 +64,21 @@ Elsewhere
 The action entrypoint (`open.js`) records the pane that was focused when the
 key fired, then opens the overlay pane (`mover.js`), which reads the live
 topology over the herdr CLI (`pane list`, `workspace list`, `tab list`) and
-executes moves with `pane move` / `pane swap`. Re-splits use the
-temp-tab bounce described above. Everything goes through `HERDR_BIN_PATH`, so
-there is no raw socket handling.
+executes moves with `pane move` / `pane swap`. Everything goes through
+`HERDR_BIN_PATH`, so there is no raw socket handling.
+
+Three herdr quirks the plugin hides:
+
+- **No in-place re-split** — changing a stacked pair to side-by-side is done by
+  bouncing the pane through a temporary tab and moving it back with the other
+  `--split` direction.
+- **`--split` only knows `right` and `down`** — left/up placement is done as a
+  split followed by a `pane swap` in the requested direction.
+- **Closing an overlay restores the pre-overlay layout** — so selections are
+  not executed by the overlay itself; they are handed to a detached child
+  process that fires ~400ms after the overlay has closed, against the restored
+  layout. Moving a pane while an overlay covers it gets silently reverted
+  otherwise.
 
 ## License
 
