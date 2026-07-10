@@ -5,9 +5,22 @@
 // neighbor, or move it to another tab / workspace.
 "use strict";
 
-const { spawnSync } = require("node:child_process");
+const { spawnSync, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+
+// --exec mode: run scheduled herdr commands after the overlay has closed.
+// The overlay restores the pre-overlay layout when it closes, which would
+// revert any move made while it was open — so moves run here, detached.
+if (process.argv[2] === "--exec") {
+  const cmds = JSON.parse(process.argv[3]);
+  const bin = process.env.HERDR_BIN_PATH ?? "herdr";
+  setTimeout(() => {
+    for (const args of cmds) spawnSync(bin, args, { encoding: "utf8" });
+    process.exit(0);
+  }, 400);
+  return;
+}
 
 const herdr = process.env.HERDR_BIN_PATH ?? "herdr";
 const stateDir = process.env.HERDR_PLUGIN_STATE_DIR ?? "/tmp/herdr-pane-mover";
@@ -92,70 +105,49 @@ function siblingIn(tabId, panes, target) {
   );
 }
 
+// Each operation returns the list of herdr CLI commands to run. They are NOT
+// executed here: the overlay restores the pre-overlay layout when it closes,
+// which would revert any move made while it is open. Selections are handed to
+// a detached --exec child that fires after the overlay has closed.
+
 // Re-split within the same tab: herdr has no in-place re-split, so bounce the
 // pane out to a temp tab and bring it back with the new direction.
 function resplit(state, dir) {
   const { target, targetPane, panes } = state;
   const sib = siblingIn(targetPane.tab_id, panes, target);
   if (!sib) throw new Error("no sibling pane to split against");
-  cli([
-    "pane",
-    "move",
-    target,
-    "--new-tab",
-    "--workspace",
-    targetPane.workspace_id,
-    "--no-focus",
-  ]);
-  cli([
-    "pane",
-    "move",
-    target,
-    "--tab",
-    targetPane.tab_id,
-    "--split",
-    dir,
-    "--target-pane",
-    sib.pane_id,
-    "--focus",
-  ]);
+  return [
+    ["pane", "move", target, "--new-tab", "--workspace", targetPane.workspace_id, "--no-focus"],
+    ["pane", "move", target, "--tab", targetPane.tab_id, "--split", dir, "--target-pane", sib.pane_id, "--focus"],
+  ];
 }
 
 function swap(state, dir) {
-  cli(["pane", "swap", "--direction", dir, "--pane", state.target]);
+  return [["pane", "swap", "--direction", dir, "--pane", state.target]];
 }
 
 function moveToTab(state, tabId, dir) {
-  cli([
-    "pane",
-    "move",
-    state.target,
-    "--tab",
-    tabId,
-    "--split",
-    dir,
-    "--focus",
-  ]);
+  return [["pane", "move", state.target, "--tab", tabId, "--split", dir, "--focus"]];
 }
 
 function moveToWorkspace(state, wsId) {
-  cli([
-    "pane",
-    "move",
-    state.target,
-    "--new-tab",
-    "--workspace",
-    wsId,
-    "--focus",
-  ]);
+  return [["pane", "move", state.target, "--new-tab", "--workspace", wsId, "--focus"]];
 }
 
 function moveToNewTab(state) {
-  moveToWorkspace(state, state.targetPane.workspace_id);
+  return moveToWorkspace(state, state.targetPane.workspace_id);
 }
 
 function moveToNewWorkspace(state) {
-  cli(["pane", "move", state.target, "--new-workspace", "--focus"]);
+  return [["pane", "move", state.target, "--new-workspace", "--focus"]];
+}
+
+function scheduleAfterClose(cmds) {
+  spawn(process.execPath, [__filename, "--exec", JSON.stringify(cmds)], {
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  }).unref();
 }
 
 // ---------- terminal UI ----------
@@ -351,7 +343,7 @@ function workspaceMenu(state) {
       const w = await runMenu("Move to which workspace?", workspaceMenu(state));
       choice = w ? { act: () => moveToWorkspace(state, w.wsId) } : null;
     }
-    if (choice && choice.act) choice.act();
+    if (choice && choice.act) scheduleAfterClose(choice.act());
     quit(0);
   } catch (e) {
     status = `error: ${e.message}`;
