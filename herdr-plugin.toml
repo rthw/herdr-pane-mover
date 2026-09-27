@@ -1,6 +1,6 @@
 id = "osamahbeig.pane-mover"
 name = "Pane Mover"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.7.0"
 description = "Clickable overlay menu to move, re-split, or swap the current pane across tabs and workspaces."
 platforms = ["macos", "linux"]
@@ -10,6 +10,42 @@ id = "open"
 title = "Move this pane…"
 contexts = ["workspace"]
 command = ["node", "open.js"]
+
+[[actions]]
+id = "swap-previous"
+title = "Swap pane with previous"
+contexts = ["workspace"]
+command = ["node", "direct.js", "swap-previous"]
+
+[[actions]]
+id = "swap-next"
+title = "Swap pane with next"
+contexts = ["workspace"]
+command = ["node", "direct.js", "swap-next"]
+
+[[actions]]
+id = "move-tab-previous"
+title = "Move pane to previous tab"
+contexts = ["workspace"]
+command = ["node", "direct.js", "move-tab-previous"]
+
+[[actions]]
+id = "move-tab-next"
+title = "Move pane to next tab"
+contexts = ["workspace"]
+command = ["node", "direct.js", "move-tab-next"]
+
+[[actions]]
+id = "move-workspace-previous"
+title = "Move pane to previous workspace"
+contexts = ["workspace"]
+command = ["node", "direct.js", "move-workspace-previous"]
+
+[[actions]]
+id = "move-workspace-next"
+title = "Move pane to next workspace"
+contexts = ["workspace"]
+command = ["node", "direct.js", "move-workspace-next"]
 
 [[panes]]
 id = "mover"

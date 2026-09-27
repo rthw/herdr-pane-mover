@@ -39,6 +39,50 @@ command = "osamahbeig.pane-mover.open"
 description = "move this pane"
 ```
 
+### Direct shortcuts (no menu)
+
+```toml
+[[keys.command]]
+key = "cmd+alt+["
+type = "plugin_action"
+command = "osamahbeig.pane-mover.swap-previous"
+description = "swap pane with previous"
+
+[[keys.command]]
+key = "cmd+alt+]"
+type = "plugin_action"
+command = "osamahbeig.pane-mover.swap-next"
+description = "swap pane with next"
+
+[[keys.command]]
+key = "cmd+alt+left"
+type = "plugin_action"
+command = "osamahbeig.pane-mover.move-tab-previous"
+description = "move pane to previous tab"
+
+[[keys.command]]
+key = "cmd+alt+right"
+type = "plugin_action"
+command = "osamahbeig.pane-mover.move-tab-next"
+description = "move pane to next tab"
+
+[[keys.command]]
+key = "cmd+alt+up"
+type = "plugin_action"
+command = "osamahbeig.pane-mover.move-workspace-previous"
+description = "move pane to previous workspace"
+
+[[keys.command]]
+key = "cmd+alt+down"
+type = "plugin_action"
+command = "osamahbeig.pane-mover.move-workspace-next"
+description = "move pane to next workspace"
+```
+
+The tab and workspace lists use Herdr's live order and do not wrap at either
+end. Moving to an adjacent workspace moves only the active pane and creates a
+new tab there.
+
 ## Use
 
 - Press the binding in the pane you want to move.
