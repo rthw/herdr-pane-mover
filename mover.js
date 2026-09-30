@@ -29,6 +29,9 @@ const selfPane = process.env.HERDR_PANE_ID ?? null; // the overlay's own pane
 
 // ---------- herdr CLI helpers ----------
 
+// ЙЦУКЕН -> QWERTY по физической клавише, чтобы меню работало в русской раскладке
+const RU_KEYS = {"й": "q", "Й": "Q", "ц": "w", "Ц": "W", "у": "e", "У": "E", "к": "r", "К": "R", "е": "t", "Е": "T", "н": "y", "Н": "Y", "г": "u", "Г": "U", "ш": "i", "Ш": "I", "щ": "o", "Щ": "O", "з": "p", "З": "P", "ф": "a", "Ф": "A", "ы": "s", "Ы": "S", "в": "d", "В": "D", "а": "f", "А": "F", "п": "g", "П": "G", "р": "h", "Р": "H", "о": "j", "О": "J", "л": "k", "Л": "K", "д": "l", "Д": "L", "я": "z", "Я": "Z", "ч": "x", "Ч": "X", "с": "c", "С": "C", "м": "v", "М": "V", "и": "b", "И": "B", "т": "n", "Т": "N", "ь": "m", "Ь": "M"};
+
 function cli(args) {
   const res = spawnSync(herdr, args, { encoding: "utf8" });
   if (res.status !== 0) {
@@ -237,7 +240,8 @@ function runMenu(title, items) {
     cursor = firstSelectable(0, 1);
     render(title);
     const onData = (buf) => {
-      const s = buf.toString("latin1");
+      const raw = buf.toString("utf8");
+      const s = RU_KEYS[raw] ?? raw; // хоткеи в русской раскладке
       // SGR mouse press: ESC [ < b ; x ; y M
       const m = s.match(/\x1b\[<(\d+);(\d+);(\d+)M/);
       if (m && (Number(m[1]) & 3) !== 3) {
